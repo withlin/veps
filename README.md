@@ -29,6 +29,31 @@
       - [Auto-Discovery Implementation](#auto-discovery-implementation)
   - [Risks and Mitigations](#risks-and-mitigations)
   - [Implementation Progress](#implementation-progress)
+  - [Test Plan](#test-plan)
+    - [Prerequisite testing updates](#prerequisite-testing-updates)
+    - [Unit tests](#unit-tests)
+    - [Integration tests](#integration-tests)
+    - [e2e tests](#e2e-tests)
+  - [Graduation Criteria](#graduation-criteria)
+    - [Alpha](#alpha)
+    - [Beta](#beta)
+    - [Stable](#stable)
+  - [Deprecated](#deprecated)
+  - [Disabled](#disabled)
+  - [Upgrade / Downgrade Strategy](#upgrade--downgrade-strategy)
+    - [Upgrade Strategy](#upgrade-strategy)
+    - [Downgrade Strategy](#downgrade-strategy)
+    - [Version Skew Strategy](#version-skew-strategy)
+  - [Production Readiness Review Questionnaire](#production-readiness-review-questionnaire)
+    - [Feature Enablement and Rollback](#feature-enablement-and-rollback)
+    - [Rollout, Upgrade and Rollback Planning](#rollout-upgrade-and-rollback-planning)
+    - [Monitoring Requirements](#monitoring-requirements)
+    - [Dependencies](#dependencies)
+    - [Scalability](#scalability)
+    - [Troubleshooting](#troubleshooting)
+  - [Implementation History](#implementation-history)
+  - [Drawbacks](#drawbacks)
+  - [Alternatives](#alternatives)
   - [References](#references)
 
 ## Overview
@@ -882,6 +907,307 @@ type Collector struct {
 - [ ] Create example dashboards
 - [ ] Prepare release plan
 
+## Test Plan
+
+### Prerequisite testing updates
+
+Before implementing this feature, we need to establish baseline benchmarks for performance comparison:
+
+- Resource usage (CPU, memory) of current vmagent without Kubernetes monitoring
+- Collection latency with traditional configurations using node-exporter, cadvisor, and kube-state-metrics
+- Coverage of metrics in traditional setup
+- Reliability metrics (error rates, collection failures)
+
+### Unit tests
+
+Unit tests will cover:
+
+- Configuration parsing for various collector parameters
+- Metric registration and deregistration
+- Collector lifecycle management (initialization, start, stop)
+- Validity of generated metric names and labels
+- Error handling in collection code paths
+- Concurrency safety of collectors
+
+Each collector will have dedicated test suites:
+
+- Node collector: Tests for CPU, memory, filesystem, network metrics
+- Container collector: Tests for container metadata, resource usage metrics
+- Kubernetes state collector: Tests for object state tracking, API interactions
+- Auto-discovery: Tests for annotations parsing, role configuration
+
+### Integration tests
+
+Integration tests will verify:
+
+- End-to-end metric collection in containerized environments
+- Interaction with Kubernetes API server using mock clients
+- Performance under various load conditions
+- Configuration reload and dynamic reconfiguration
+- Compatibility with various Kubernetes versions (1.16+)
+- Multiple collectors working together
+
+### e2e tests
+
+End-to-end tests will be run on real Kubernetes clusters to validate:
+
+- Collection accuracy compared to traditional tools
+- Resource consumption (should be lower than combined tools)
+- Scalability with large cluster sizes (100+ nodes)
+- Fault tolerance (node failures, API server unavailability)
+- Upgrade and downgrade scenarios
+- Completeness of collected metrics for dashboard rendering
+
+## Graduation Criteria
+
+### Alpha
+
+Alpha release requirements:
+
+- Complete implementation of all core collectors
+- Basic documentation and usage examples
+- Functioning end-to-end on standard Kubernetes environments
+- Unit test coverage >70%
+- Performance at least equal to traditional setup
+- Support for the most common metrics (80/20 rule)
+- Clearly documented limitations and known issues
+
+### Beta
+
+Beta release requirements:
+
+- Successfully running in at least 3 production environments
+- Comprehensive documentation, including troubleshooting guides
+- Performance optimizations complete
+- Unit test coverage >85%
+- Integration and e2e test coverage >60%
+- Dashboard templates available for major observability platforms
+- Alert rule templates available
+- No known critical bugs
+- Graceful degradation under error conditions
+
+### Stable
+
+Stable release requirements:
+
+- Production usage for 3+ months without major issues
+- Complete documentation, including reference dashboards and best practices
+- Performance benchmarks showing improvement over traditional setup
+- Unit test coverage >90%, integration and e2e test coverage >75%
+- Telemetry for usage and error reporting
+- Compatibility with all supported Kubernetes versions
+- Verified upgrade path from beta
+- Feature complete for targeted use cases
+
+## Deprecated
+
+Features that will be deprecated as part of this implementation:
+
+- Complex manual kubernetes_sd_config configurations (replaced by simplified parameters)
+- Manual service discovery configuration for common Kubernetes components
+- Direct dependencies on external monitoring components (node-exporter, cadvisor, kube-state-metrics)
+
+The traditional configuration approach will still be available but marked as legacy in documentation.
+
+## Disabled
+
+The feature will be disabled by default and requires explicit opt-in via the `-promscrape.kubernetes=true` flag. 
+
+Individual collectors can be enabled or disabled through the `-promscrape.kubernetes.collectors` parameter.
+
+## Upgrade / Downgrade Strategy
+
+### Upgrade Strategy
+
+For upgrades to versions with this feature:
+
+1. Deploy new vmagent version with Kubernetes monitoring disabled
+2. Verify normal operation
+3. Enable Kubernetes monitoring with only non-critical collectors (node, container)
+4. Validate collected metrics and dashboard rendering
+5. Enable remaining collectors
+6. Once validated, remove redundant components (node-exporter, cadvisor, kube-state-metrics)
+
+### Downgrade Strategy
+
+For downgrades from versions with this feature:
+
+1. Deploy traditional monitoring components alongside vmagent
+2. Verify they're working correctly
+3. Disable Kubernetes monitoring in vmagent
+4. Downgrade vmagent version
+
+### Version Skew Strategy
+
+In environments with multiple vmagent versions:
+
+- Ensure metrics naming consistency with configuration
+- Use metric relabeling to harmonize differences if needed
+- Maintain backward compatibility in metric naming where possible
+- Document potential conflicts and mitigation
+
+## Production Readiness Review Questionnaire
+
+### Feature Enablement and Rollback
+
+1. **How can this feature be enabled / disabled in a live cluster?**
+   - Feature gate: `-promscrape.kubernetes=true|false`
+   - Other flags: Individual collectors can be enabled/disabled separately
+   - Can be changed at runtime? No, requires restart of vmagent
+
+2. **Does enabling the feature change any default behavior?**
+   - Yes, it adds automatic discovery and collection of Kubernetes metrics
+   - No changes when disabled
+
+3. **Can the feature be disabled once it has been enabled?**
+   - Yes, by setting `-promscrape.kubernetes=false`
+   - Requires restart of vmagent
+
+4. **What happens if we disable the feature while it's in use?**
+   - Kubernetes metrics will no longer be collected
+   - Existing metrics in storage will remain until retention period
+
+5. **Are there any prerequisites for enabling this feature?**
+   - RBAC permissions for vmagent to access Kubernetes API
+   - Access to container runtime statistics
+   - Access to node filesystem for node metrics
+
+### Rollout, Upgrade and Rollback Planning
+
+1. **How can an operator determine if the feature is in use?**
+   - Check for presence of vm_* metrics from the collectors
+   - Look for log messages indicating Kubernetes monitoring is enabled
+   - Monitor resource usage patterns typical of active collectors
+
+2. **How can an operator determine if the feature is enabled but not in use?**
+   - Monitor for log messages about failed initialization
+   - Check for absence of expected metrics despite enabling the feature
+   - Verify error counters in vmagent's own metrics
+
+3. **What are the SLIs for this feature?**
+   - Latency: Metric collection duration
+   - Availability: Percentage of successful scrapes
+   - Errors: Rate of collection errors
+   - Resource usage: CPU and memory consumption
+
+4. **What are reasonable SLOs for the above SLIs?**
+   - Latency: 99% of scrapes complete within 5s
+   - Availability: 99.9% successful scrapes
+   - Errors: <0.1% error rate
+   - Resource usage: <200MB base + 2MB per node
+
+5. **Are there any known limitations?**
+   - Not all metrics from traditional exporters will be available
+   - Performance may degrade in very large clusters (1000+ nodes)
+   - Some specialized metrics require custom configuration
+
+### Monitoring Requirements
+
+1. **How can an operator monitor the feature?**
+   - Monitor vmagent's own metrics for collector performance
+   - Watch for collection errors in logs
+   - Monitor resource usage of vmagent pods
+   - Check for expected metric presence and freshness
+
+2. **What are the reasonable alerting thresholds?**
+   - Alert on >5% error rate in collection
+   - Alert on persistent absence of critical metrics
+   - Alert on collection latency exceeding 10s
+   - Alert on vmagent resource saturation
+
+3. **Are there any missing metrics that would be useful?**
+   - Per-collector success/failure rates
+   - API request counts and latencies
+   - Metric cardinality statistics
+   - Cache hit/miss rates
+
+### Dependencies
+
+1. **Does this feature depend on any specific services running in the cluster?**
+   - Kubernetes API server
+   - Kubelet on each node
+   - Container runtime with stats API
+
+2. **Does this feature depend on any other features?**
+   - General Prometheus scraping functionality in vmagent
+   - Service account and RBAC support in Kubernetes
+
+3. **Does this feature make use of any API Extensions?**
+   - No new API extensions are required
+
+### Scalability
+
+1. **Will enabling this feature result in any new API calls?**
+   - Yes, calls to Kubernetes API for listing and watching resources
+   - Kubelet API calls for container stats
+   - Filesystem access for node stats
+
+2. **Will enabling this feature result in introducing new API types?**
+   - No new API types are introduced
+
+3. **Will enabling this feature result in any new calls to cloud provider?**
+   - No direct cloud provider API calls
+
+4. **Will enabling this feature result in increasing size or count of the existing API objects?**
+   - No change to API object size
+   - No creation of additional API objects
+
+5. **Will enabling this feature result in increasing time taken by any operations?**
+   - Startup time of vmagent will increase slightly
+   - No impact on Kubernetes control plane operations
+
+6. **Will enabling this feature result in any new cardinality of metrics?**
+   - Yes, new metrics with label dimensions for Kubernetes objects
+   - Controlled through resource selection and namespaces filtering
+
+### Troubleshooting
+
+1. **How does this feature react if the API server and/or etcd is unavailable?**
+   - Falls back to cached data for previously discovered resources
+   - Continues collecting metrics that don't require API server
+   - Logs errors and increments error counters
+   - Retries with backoff for API server operations
+
+2. **What are other known failure modes?**
+   - Insufficient permissions: Logs authorization errors
+   - Resource constraints: Collection slows or fails under resource pressure
+   - Configuration errors: Logs parsing errors and uses defaults
+   - Container runtime API changes: May fail to collect container metrics
+
+3. **What steps should be taken if SLOs are not being met?**
+   - Check vmagent logs for specific error messages
+   - Verify RBAC permissions are correct
+   - Consider reducing enabled collectors or increasing resources
+   - Check for Kubernetes API server performance issues
+   - Reduce collection frequency if necessary
+
+## Implementation History
+
+- **2025-03-17**: Initial VEP draft created
+
+## Drawbacks
+
+Potential drawbacks of this approach include:
+
+1. **Increased complexity in vmagent**: Adding builtin collectors increases code complexity and maintenance burden
+2. **Potential resource usage**: While more efficient than multiple components, still requires resources on each node
+3. **Less flexibility**: Simplified approach may not cover all custom monitoring scenarios
+4. **More permissions required**: vmagent needs broader permissions to collect all metrics
+5. **Consistency challenges**: Maintaining consistent metrics during version transitions
+
+## Alternatives
+
+Alternative approaches that were considered:
+
+1. **Operator-based approach**: Create a Kubernetes operator to manage monitoring components
+   - Pros: Declarative configuration, managed lifecycle
+   - Cons: Another component to maintain, doesn't simplify collection
+
+2. **Push-based approach**: Have Kubernetes components push metrics to VictoriaMetrics
+   - Pros: Reduced scrape complexity, potentially lower latency
+   - Cons: Counter to Prometheus model, requires changes to components
+
+  
 ## References
 
 1. [GitHub issue #1393: Automatically discover and scrape Prometheus targets in Kubernetes](https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1393)
