@@ -7,54 +7,52 @@
 ## Table of Contents
 
 - [VictoriaMetrics Enhancement Proposals(VEPs): Automation Kubernetes Monitoring for vmagent](#victoriametrics-enhancement-proposalsveps-automation-kubernetes-monitoring-for-vmagent)
-  - [Table of Contents](#table-of-contents)
-  - [Overview](#overview)
-  - [Motivation](#motivation)
-  - [Goals](#goals)
-  - [Non-Goals](#non-goals)
-  - [Proposal](#proposal)
-    - [Architecture Design](#architecture-design)
-    - [Command Line Parameters Design](#command-line-parameters-design)
-    - [Built-in Collectors Design](#built-in-collectors-design)
-      - [1. Node Metrics Collector](#1-node-metrics-collector)
-      - [2. Container Metrics Collector](#2-container-metrics-collector)
-      - [3. Kubernetes State Metrics Collector](#3-kubernetes-state-metrics-collector)
-      - [4. Application Auto-Discovery](#4-application-auto-discovery)
-    - [Implementation](#implementation)
-      - [Collector Interface](#collector-interface)
-      - [vmagent Main Configuration](#vmagent-main-configuration)
-      - [Node Collector Implementation](#node-collector-implementation)
-      - [Container Collector Implementation](#container-collector-implementation)
-      - [Kubernetes State Collector Implementation](#kubernetes-state-collector-implementation)
-      - [Auto-Discovery Implementation](#auto-discovery-implementation)
-  - [Risks and Mitigations](#risks-and-mitigations)
-  - [Implementation Progress](#implementation-progress)
-  - [Test Plan](#test-plan)
-    - [Prerequisite testing updates](#prerequisite-testing-updates)
-    - [Unit tests](#unit-tests)
-    - [Integration tests](#integration-tests)
-    - [e2e tests](#e2e-tests)
-  - [Graduation Criteria](#graduation-criteria)
-    - [Alpha](#alpha)
-    - [Beta](#beta)
-    - [Stable](#stable)
-  - [Deprecated](#deprecated)
-  - [Disabled](#disabled)
-  - [Upgrade / Downgrade Strategy](#upgrade--downgrade-strategy)
-    - [Upgrade Strategy](#upgrade-strategy)
-    - [Downgrade Strategy](#downgrade-strategy)
-    - [Version Skew Strategy](#version-skew-strategy)
-  - [Production Readiness Review Questionnaire](#production-readiness-review-questionnaire)
-    - [Feature Enablement and Rollback](#feature-enablement-and-rollback)
-    - [Rollout, Upgrade and Rollback Planning](#rollout-upgrade-and-rollback-planning)
-    - [Monitoring Requirements](#monitoring-requirements)
-    - [Dependencies](#dependencies)
-    - [Scalability](#scalability)
-    - [Troubleshooting](#troubleshooting)
-  - [Implementation History](#implementation-history)
-  - [Drawbacks](#drawbacks)
-  - [Alternatives](#alternatives)
-  - [References](#references)
+	- [Table of Contents](#table-of-contents)
+	- [Overview](#overview)
+	- [Motivation](#motivation)
+	- [Goals](#goals)
+	- [Non-Goals](#non-goals)
+	- [Proposal](#proposal)
+		- [Architecture Design](#architecture-design)
+		- [Command Line Parameters Design](#command-line-parameters-design)
+		- [Built-in Collectors Design](#built-in-collectors-design)
+			- [1. Node Metrics Collector](#1-node-metrics-collector)
+			- [2. Container Metrics Collector](#2-container-metrics-collector)
+			- [3. Kubernetes State Metrics Collector](#3-kubernetes-state-metrics-collector)
+			- [4. Application Auto-Discovery](#4-application-auto-discovery)
+		- [Implementation](#implementation)
+			- [Collector Interface](#collector-interface)
+			- [vmagent Main Configuration](#vmagent-main-configuration)
+			- [Node Collector Implementation](#node-collector-implementation)
+			- [Kubernetes API Client](#kubernetes-api-client)
+	- [Risks and Mitigations](#risks-and-mitigations)
+	- [Implementation Progress](#implementation-progress)
+	- [Test Plan](#test-plan)
+		- [Prerequisite testing updates](#prerequisite-testing-updates)
+		- [Unit tests](#unit-tests)
+		- [Integration tests](#integration-tests)
+		- [e2e tests](#e2e-tests)
+	- [Graduation Criteria](#graduation-criteria)
+		- [Alpha](#alpha)
+		- [Beta](#beta)
+		- [Stable](#stable)
+	- [Deprecated](#deprecated)
+	- [Disabled](#disabled)
+	- [Upgrade / Downgrade Strategy](#upgrade--downgrade-strategy)
+		- [Upgrade Strategy](#upgrade-strategy)
+		- [Downgrade Strategy](#downgrade-strategy)
+		- [Version Skew Strategy](#version-skew-strategy)
+	- [Production Readiness Review Questionnaire](#production-readiness-review-questionnaire)
+		- [Feature Enablement and Rollback](#feature-enablement-and-rollback)
+		- [Rollout, Upgrade and Rollback Planning](#rollout-upgrade-and-rollback-planning)
+		- [Monitoring Requirements](#monitoring-requirements)
+		- [Dependencies](#dependencies)
+		- [Scalability](#scalability)
+		- [Troubleshooting](#troubleshooting)
+	- [Implementation History](#implementation-history)
+	- [Drawbacks](#drawbacks)
+	- [Alternatives](#alternatives)
+	- [References](#references)
 
 ## Overview
 
@@ -68,27 +66,32 @@ According to the issues described in [GitHub issue #1393](https://github.com/Vic
    - Kubernetes service discovery (kubernetes_sd_config) configuration is extremely complex
    - Typical configurations include hundreds of lines of difficult-to-understand YAML
    - Different configurations produce different metric names and labels, making it difficult to create unified dashboards and alerting rules
+   - DevOps professionals often can only copy configuration snippets from the internet without understanding how the entire system works
 
 2. **Multiple Component Dependencies**:
    - Requires separate deployment of kube-state-metrics
-   - Requires cadvisor
-   - Requires node-exporter
+   - Requires cadvisor on each node
+   - Requires node-exporter on each node
    - Requires configuration for application metrics scraping
 
-3. **Resource Waste**: Many generated metrics are never used in dashboards or alerting rules
+3. **Resource Waste**: 
+   - Many generated metrics are never used in dashboards or alerting rules but still consume storage resources
+   - Multiple components increase overall resource consumption
 
-4. **Operational Complexity**: DevOps professionals often can only copy configuration snippets from the internet without understanding how the entire system works
+4. **Operational Complexity**: 
+   - Operators like Prometheus Operator or VictoriaMetrics Operator generate huge scrape configs with unreadable relabeling rules
+   - Difficult to understand, configure, and debug the monitoring setup
 
-By providing simple command-line parameters to enable standardized Kubernetes monitoring, we can greatly simplify this process while ensuring consistent metric naming and labeling conventions.
+By providing a single vmagent deployment with built-in lightweight collectors and simple command-line parameters to enable standardized Kubernetes monitoring, we can greatly simplify this process while ensuring consistent metric naming and labeling conventions.
 
 ## Goals
 
 1. Provide a simple command-line flag `-promscrape.kubernetes=true` to enable Kubernetes monitoring
-2. Support flexible selection of monitoring components through the `-promscrape.kubernetes.collectors` parameter
-3. Integrate lightweight alternative components to eliminate dependencies on node-exporter, cadvisor, and kube-state-metrics
-4. Establish unified metric naming and labeling conventions
-5. Simplify automatic discovery and collection of application metrics
-6. Reduce collection of unnecessary metrics to lower resource consumption
+2. Deploy vmagent as a DaemonSet with minimal configuration to monitor all Kubernetes components
+3. Integrate lightweight alternatives to eliminate dependencies on node-exporter, cadvisor, and kube-state-metrics
+4. Ensure exact compatibility with metric names and labels from standard components for dashboard/alerting compatibility
+5. Simplify automatic discovery and collection of application metrics through annotations
+6. Collect only essential metrics that are actually used in dashboards and alerting rules
 7. Provide official Kubernetes monitoring dashboards and alerting rules
 
 ## Non-Goals
@@ -101,52 +104,49 @@ By providing simple command-line parameters to enable standardized Kubernetes mo
 
 ### Architecture Design
 
-vmagent will be deployed as a DaemonSet on each node in the Kubernetes cluster, integrating the following functionalities:
+vmagent will be deployed as a DaemonSet on each node in the Kubernetes cluster, integrating the following functionalities directly within the vmagent binary:
 
-1. **Node Metrics Collector**: Replaces node-exporter, collecting node-level metrics
-2. **Container Metrics Collector**: Replaces cadvisor, collecting container-level metrics
-3. **Kubernetes State Metrics Collector**: Replaces kube-state-metrics, collecting cluster object states
-4. **Application Auto-Discovery**: Automatically discovers and scrapes application metrics based on annotations
-5. **Unified Metrics Handling**: Standardizes metric names and labels
+1. **Node Metrics Collector**: A lightweight Go package that replaces node-exporter, exposing only the essential node-level metrics frequently used in dashboards and alerting rules.
+
+2. **Container Metrics Collector**: A lightweight Go package that replaces cadvisor, collecting only the essential container-level metrics frequently used in dashboards and alerting rules.
+
+3. **Kubernetes State Metrics Collector**: A lightweight Go package that replaces kube-state-metrics, exposing only the essential Kubernetes object states frequently used in dashboards and alerting rules.
+
+4. **Application Auto-Discovery**: Automatically discovers and scrapes application metrics based on annotations such as `victoriametrics.com/scrape`, `victoriametrics.com/port`, and `victoriametrics.com/path`.
+
+Key design principles:
+- **Metric Compatibility**: Collected metrics names and labels are exactly the same as node-exporter, cadvisor, and kube-state-metrics, ensuring compatibility with existing dashboards, alerts, and recording rules
+- **Lightweight Implementation**: Avoid using over-engineered official packages, use simpler alternatives like `github.com/VictoriaMetrics/metrics` or direct `fmt.Fprintf` for metrics exposition
+- **Avoid Kubernetes SDK**: Use VictoriaMetrics' existing Kubernetes discovery code or lightweight HTTP client instead of the official Kubernetes SDK to reduce binary size
+- **Simplified Architecture**: Minimize configuration complexity, focus on core functionality with the smallest possible set of metrics
+- **Efficient Resource Usage**: Start with the minimal set of essential metrics and add others based on user demand
 
 ### Command Line Parameters Design
+
+Following the principle of keeping the architecture as simple as possible, we will start with only a minimal set of command-line parameters necessary for basic functionality:
 
 ```bash
 # Core switch
 -promscrape.kubernetes=true                          # Main switch: Enable Kubernetes monitoring functionality
 
-# Collector control
--promscrape.kubernetes.collectors=node,container,kube-state,app  # Specify enabled collectors
+# Collector selection
+-promscrape.kubernetes.collectors=node,container,kube-state,app  # Specify enabled collectors (comma-separated)
 
-# Node collector parameters
--promscrape.kubernetes.node.enabled=true               # Enable node collector
--promscrape.kubernetes.node.interval="15s"             # Collection interval
--promscrape.kubernetes.node.collectors="all"           # Collect all metrics (default)
-# Or select specific collectors
--promscrape.kubernetes.node.collectors="cpu,meminfo,filesystem,netdev,loadavg,diskstats"
+# Global collection interval
+-promscrape.kubernetes.interval="15s"                # Default collection interval for all collectors
 
-# Container collector parameters
--promscrape.kubernetes.container.enabled=true          # Enable container collector
--promscrape.kubernetes.container.interval="15s"        # Collection interval
--promscrape.kubernetes.container.collectors="all"      # Collect all metrics (default)
--promscrape.kubernetes.container.useCache=true         # Use cache to improve performance
--promscrape.kubernetes.container.workers=5             # Number of parallel worker threads
-
-# Kubernetes state collector parameters
--promscrape.kubernetes.kube-state.enabled=true         # Enable kube-state collector
--promscrape.kubernetes.kube-state.interval="30s"       # Collection interval
--promscrape.kubernetes.kube-state.resources="all"      # Collect all resources (default)
--promscrape.kubernetes.kube-state.namespaces=""        # Limit to namespaces, empty means all
--promscrape.kubernetes.kube-state.excludeNamespaces="" # Excluded namespaces
-
-# Application auto-discovery parameters
--promscrape.kubernetes.autoDiscover.enabled=true       # Enable auto-discovery functionality
--promscrape.kubernetes.autoDiscover.interval="30s"     # Discovery refresh interval
--promscrape.kubernetes.autoDiscover.roles="pod,service,node,endpoints,ingress"  # Enabled service discovery roles
--promscrape.kubernetes.autoDiscover.pod.pathAnnotation="victoriametrics.com/path"  # Metrics path annotation
--promscrape.kubernetes.autoDiscover.pod.portAnnotation="victoriametrics.com/port"  # Metrics port annotation
--promscrape.kubernetes.autoDiscover.pod.schemeAnnotation="victoriametrics.com/scheme"  # Protocol annotation
+# Namespaces filter (optional)
+-promscrape.kubernetes.namespaces=""                 # Limit to specific namespaces (comma-separated, empty means all)
+-promscrape.kubernetes.exclude-namespaces=""         # Exclude specific namespaces (comma-separated)
 ```
+
+This minimal approach provides:
+1. A single flag to enable/disable the entire functionality
+2. A simple way to select which collectors to enable
+3. A global collection interval that applies to all collectors
+4. Basic namespace filtering when needed
+
+Additional parameters will only be added based on real user demand and if they align with the project's vision of simplicity and efficiency.
 
 ### Built-in Collectors Design
 
@@ -160,14 +160,14 @@ A lightweight node-exporter alternative that collects key node metrics:
 - Network throughput
 - System load
 
-Key metrics examples:
+Key metrics examples (compatible with node-exporter):
 ```
-vm_node_cpu_usage_percent{cpu="0", mode="user"} 24.5
-vm_node_memory_bytes{type="used"} 8053063680
-vm_node_memory_bytes{type="total"} 16106127360
-vm_node_filesystem_bytes{device="/dev/sda1", mountpoint="/", fstype="ext4", type="used"} 52034642240
-vm_node_network_bytes_total{device="eth0", direction="receive"} 1234567890
-vm_node_load1 0.42
+node_cpu_seconds_total{cpu="0", mode="user"} 24.5
+node_memory_MemTotal_bytes 16106127360
+node_memory_MemFree_bytes 8053063680
+node_filesystem_avail_bytes{device="/dev/sda1", mountpoint="/", fstype="ext4"} 52034642240
+node_network_receive_bytes_total{device="eth0"} 1234567890
+node_load1 0.42
 ```
 
 #### 2. Container Metrics Collector
@@ -179,12 +179,12 @@ An efficient cadvisor alternative that collects container resource usage metrics
 - Container network usage
 - Container disk I/O
 
-Key metrics examples:
+Key metrics examples (compatible with cadvisor):
 ```
-vm_container_cpu_usage_seconds_total{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default"} 15.7
-vm_container_memory_usage_bytes{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default", type="used"} 67108864
-vm_container_memory_usage_bytes{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default", type="limit"} 134217728
-vm_container_cpu_throttling_seconds_total{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default"} 0.45
+container_cpu_usage_seconds_total{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default"} 15.7
+container_memory_usage_bytes{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default"} 67108864
+container_memory_working_set_bytes{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default"} 58982400
+container_cpu_cfs_throttled_seconds_total{container_id="8af9f2", container_name="nginx", pod_name="web-1", namespace="default"} 0.45
 ```
 
 #### 3. Kubernetes State Metrics Collector
@@ -196,13 +196,13 @@ An efficient kube-state-metrics alternative that collects Kubernetes object stat
 - Node status and conditions
 - Service and endpoint information
 
-Key metrics examples:
+Key metrics examples (compatible with kube-state-metrics):
 ```
-vm_kube_pod_status{namespace="default", pod="web-1", phase="Running", host_ip="10.0.0.5", pod_ip="10.244.0.17"} 1
-vm_kube_deployment_status{namespace="default", deployment="web", status_type="replicas"} 3
-vm_kube_deployment_status{namespace="default", deployment="web", status_type="available"} 3
-vm_kube_deployment_status{namespace="default", deployment="web", status_type="ready"} 3
-vm_kube_node_status{node="worker-1", condition="Ready", status="true"} 1
+kube_pod_status_phase{namespace="default", pod="web-1", phase="Running"} 1
+kube_deployment_status_replicas{namespace="default", deployment="web"} 3
+kube_deployment_status_replicas_available{namespace="default", deployment="web"} 3
+kube_deployment_status_replicas_ready{namespace="default", deployment="web"} 3
+kube_node_status_condition{node="worker-1", condition="Ready", status="true"} 1
 ```
 
 #### 4. Application Auto-Discovery
@@ -215,6 +215,8 @@ Auto-discovers and scrapes application metrics based on annotations:
 
 ### Implementation
 
+The implementation will focus on creating lightweight, efficient collectors that can be embedded directly in vmagent without external dependencies.
+
 #### Collector Interface
 
 ```go
@@ -224,9 +226,8 @@ package collector
 
 import (
 	"context"
+	"io"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Collector defines the interface that all Kubernetes metric collectors must implement
@@ -237,43 +238,25 @@ type Collector interface {
 	// Description returns the description of the collector
 	Description() string
 
-	// Initialize initializes the collector and registers all metrics
-	Initialize(registry prometheus.Registerer) error
+	// Initialize initializes the collector
+	Initialize() error
 
 	// Start starts the collector's run loop, returning a Stop function
 	Start(ctx context.Context) (StopFunc, error)
 
-	// CollectorType returns the collector type (node, container, kube-state, app)
-	CollectorType() string
-
-	// SetInterval sets the collection interval
-	SetInterval(interval time.Duration)
+	// WriteMetrics writes collected metrics to the provided io.Writer in Prometheus text format
+	WriteMetrics(w io.Writer) error
 }
 
 // StopFunc is used to stop the collector
 type StopFunc func()
 
-// Config represents the configuration options for a collector
+// Config represents the minimal configuration options for a collector
 type Config struct {
-	// Enabled indicates whether the collector is enabled
-	Enabled bool
-
 	// Interval represents the collection interval
 	Interval time.Duration
 
-	// CollectorsEnabled represents the specific collectors enabled (e.g., cpu, memory, etc.)
-	CollectorsEnabled []string
-
-	// UseCache indicates whether to use caching
-	UseCache bool
-
-	// Workers represents the number of worker threads
-	Workers int
-
-	// Resources represents the resource types to monitor
-	Resources []string
-
-	// Namespaces represents the namespaces to monitor
+	// Namespaces represents the namespaces to monitor (empty means all)
 	Namespaces []string
 
 	// ExcludeNamespaces represents the namespaces to exclude
@@ -297,10 +280,17 @@ import (
 
 var (
 	// Kubernetes monitoring related flags
-	kubernetesEnabled = flag.Bool("promscrape.kubernetes", false, "Whether to enable Kubernetes monitoring")
+	kubernetesEnabled = flag.Bool("promscrape.kubernetes", false, 
+		"Whether to enable built-in Kubernetes monitoring (node, container, kube-state metrics)")
 	
-	kubernetesCollectors = flag.String("promscrape.kubernetes.collectors", "node,container,kube-state,app", 
-		"List of collectors to enable, comma-separated. Available values: node, container, kube-state, app, all")
+	kubernetesInterval = flag.Duration("promscrape.kubernetes.interval", 15*time.Second, 
+		"Collection interval for Kubernetes metrics")
+	
+	kubernetesNamespaces = flag.String("promscrape.kubernetes.namespaces", "", 
+		"Comma-separated list of namespaces to monitor; leave empty to monitor all namespaces")
+	
+	kubernetesExcludeNamespaces = flag.String("promscrape.kubernetes.exclude-namespaces", "", 
+		"Comma-separated list of namespaces to exclude from monitoring")
 )
 
 func main() {
@@ -311,10 +301,12 @@ func main() {
 
 	// If Kubernetes monitoring is enabled, initialize the Kubernetes monitoring module
 	if *kubernetesEnabled {
-		log.Printf("Enabling Kubernetes monitoring with collectors: %s", *kubernetesCollectors)
+		log.Printf("Enabling built-in Kubernetes monitoring")
 		
 		// Create Kubernetes monitoring manager
-		k8sMgr, err := kubernetes.NewManager(*kubernetesCollectors)
+		k8sMgr, err := kubernetes.NewManager(*kubernetesInterval, 
+			parseNamespaces(*kubernetesNamespaces), 
+			parseNamespaces(*kubernetesExcludeNamespaces))
 		if err != nil {
 			log.Fatalf("Unable to initialize Kubernetes monitoring: %s", err)
 		}
@@ -330,6 +322,14 @@ func main() {
 
 	// Other vmagent code...
 }
+
+// parseNamespaces parses comma-separated namespaces into a slice
+func parseNamespaces(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
 ```
 
 #### Node Collector Implementation
@@ -342,15 +342,13 @@ package node
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
+	
+	// Use direct system call packages rather than wrappers where possible
 	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/load"
-	"github.com/shirou/gopsutil/v3/net"
 	
 	"github.com/VictoriaMetrics/VictoriaMetrics/pkg/kubernetes/collector"
 )
@@ -363,51 +361,18 @@ type Collector struct {
 	wg         sync.WaitGroup
 	interval   time.Duration
 	
-	// Performance optimization
-	metricCache  map[string]float64
-	mutex        sync.RWMutex
-	
-	// Enabled collectors
-	enabledCollectors map[string]bool
-	
-	// Metric definitions
-	cpuUsage      *prometheus.GaugeVec
-	memoryStats   *prometheus.GaugeVec
-	diskSpace     *prometheus.GaugeVec
-	diskIO        *prometheus.GaugeVec
-	networkIO     *prometheus.GaugeVec
-	loadAvg       *prometheus.GaugeVec
-	
-	// Performance metrics
-	scrapeDuration  prometheus.Histogram
-	scrapeErrors    prometheus.Counter
+	// Mutexes for thread safety
+	mu         sync.Mutex
 }
 
 // NewCollector creates a new node collector
 func NewCollector(config collector.Config) (*Collector, error) {
-	// Set default collectors
-	enabledCollectors := make(map[string]bool)
-	if len(config.CollectorsEnabled) == 0 || containsString(config.CollectorsEnabled, "all") {
-		// Enable all collectors by default
-		enabledCollectors = map[string]bool{
-			"cpu": true, "meminfo": true, "filesystem": true,
-			"netdev": true, "loadavg": true, "diskstats": true,
-		}
-	} else {
-		// Only enable specified collectors
-		for _, c := range config.CollectorsEnabled {
-			enabledCollectors[c] = true
-		}
-	}
-	
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	return &Collector{
-		ctx:              ctx,
-		cancel:           cancel,
-		interval:         config.Interval,
-		metricCache:      make(map[string]float64),
-		enabledCollectors: enabledCollectors,
+		ctx:        ctx,
+		cancel:     cancel,
+		interval:   config.Interval,
 	}, nil
 }
 
@@ -418,114 +383,11 @@ func (c *Collector) Name() string {
 
 // Description returns the collector description
 func (c *Collector) Description() string {
-	return "Collects node-level system metrics, replacing node-exporter"
+	return "Collects essential node-level system metrics, replacing node-exporter"
 }
 
-// CollectorType returns the collector type
-func (c *Collector) CollectorType() string {
-	return "node"
-}
-
-// SetInterval sets the collection interval
-func (c *Collector) SetInterval(interval time.Duration) {
-	c.interval = interval
-}
-
-// Initialize initializes the collector and registers metrics
-func (c *Collector) Initialize(registry prometheus.Registerer) error {
-	// Create CPU metrics
-	c.cpuUsage = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "vm_node_cpu_usage_percent",
-			Help: "CPU usage percentage by mode",
-		},
-		[]string{"cpu", "mode"},
-	)
-	
-	// Create memory metrics
-	c.memoryStats = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "vm_node_memory_bytes",
-			Help: "Memory statistics in bytes",
-		},
-		[]string{"type"},  // types: total, used, free, cached, buffers, etc.
-	)
-	
-	// Create disk space metrics
-	c.diskSpace = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "vm_node_filesystem_bytes",
-			Help: "Filesystem statistics in bytes",
-		},
-		[]string{"device", "mountpoint", "fstype", "type"},  // types: size, used, free, etc.
-	)
-	
-	// Create disk IO metrics
-	c.diskIO = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "vm_node_disk_io_bytes_total",
-			Help: "Total disk IO bytes",
-		},
-		[]string{"device", "direction"},  // direction: read, write
-	)
-	
-	// Create network IO metrics
-	c.networkIO = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "vm_node_network_bytes_total",
-			Help: "Network traffic statistics in bytes",
-		},
-		[]string{"device", "direction"},  // direction: receive, transmit
-	)
-	
-	// Create load metrics
-	c.loadAvg = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "vm_node_load",
-			Help: "System load average",
-		},
-		[]string{"period"},  // period: 1m, 5m, 15m
-	)
-	
-	// Create performance metrics
-	c.scrapeDuration = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Name:    "vm_node_collector_scrape_duration_seconds",
-			Help:    "Node metrics collection duration",
-			Buckets: prometheus.DefBuckets,
-		},
-	)
-	
-	c.scrapeErrors = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "vm_node_collector_scrape_errors_total",
-			Help: "Total number of node collector errors",
-		},
-	)
-	
-	// Only register metrics for enabled collectors
-	if c.enabledCollectors["cpu"] {
-		registry.MustRegister(c.cpuUsage)
-	}
-	if c.enabledCollectors["meminfo"] {
-		registry.MustRegister(c.memoryStats)
-	}
-	if c.enabledCollectors["filesystem"] {
-		registry.MustRegister(c.diskSpace)
-	}
-	if c.enabledCollectors["diskstats"] {
-		registry.MustRegister(c.diskIO)
-	}
-	if c.enabledCollectors["netdev"] {
-		registry.MustRegister(c.networkIO)
-	}
-	if c.enabledCollectors["loadavg"] {
-		registry.MustRegister(c.loadAvg)
-	}
-	
-	// Always register performance metrics
-	registry.MustRegister(c.scrapeDuration, c.scrapeErrors)
-	
+// Initialize initializes the collector
+func (c *Collector) Initialize() error {
 	return nil
 }
 
@@ -536,15 +398,14 @@ func (c *Collector) Start(ctx context.Context) (collector.StopFunc, error) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
+		
 		ticker := time.NewTicker(c.interval)
 		defer ticker.Stop()
 		
 		for {
 			select {
 			case <-ticker.C:
-				if err := c.collect(); err != nil {
-					c.scrapeErrors.Inc()
-				}
+				// No need to do anything here, metrics are collected on-demand when WriteMetrics is called
 			case <-c.ctx.Done():
 				return
 			}
@@ -557,321 +418,173 @@ func (c *Collector) Start(ctx context.Context) (collector.StopFunc, error) {
 	}, nil
 }
 
-// collect performs a complete metrics collection
-func (c *Collector) collect() error {
-	start := time.Now()
-	defer func() {
-		c.scrapeDuration.Observe(time.Since(start).Seconds())
-	}()
-	
-	// Use multiple goroutines to collect different types of metrics in parallel
-	var wg sync.WaitGroup
-	errCh := make(chan error, 5)  // Buffer for potential errors
+// WriteMetrics writes collected metrics to io.Writer
+func (c *Collector) WriteMetrics(w io.Writer) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	
 	// Collect CPU metrics
-	if c.enabledCollectors["cpu"] {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.collectCPUMetrics(); err != nil {
-				errCh <- err
-			}
-		}()
+	cpuTimes, err := cpu.Times(true)
+	if err != nil {
+		return fmt.Errorf("unable to get CPU times: %w", err)
+	}
+	
+	for _, ct := range cpuTimes {
+		fmt.Fprintf(w, "node_cpu_seconds_total{cpu=\"%s\",mode=\"user\"} %.2f\n", ct.CPU, ct.User)
+		fmt.Fprintf(w, "node_cpu_seconds_total{cpu=\"%s\",mode=\"system\"} %.2f\n", ct.CPU, ct.System)
+		fmt.Fprintf(w, "node_cpu_seconds_total{cpu=\"%s\",mode=\"idle\"} %.2f\n", ct.CPU, ct.Idle)
+		// Only add the most important CPU modes
 	}
 	
 	// Collect memory metrics
-	if c.enabledCollectors["meminfo"] {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.collectMemoryMetrics(); err != nil {
-				errCh <- err
-			}
-		}()
-	}
-	
-	// Collect filesystem metrics
-	if c.enabledCollectors["filesystem"] {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.collectFilesystemMetrics(); err != nil {
-				errCh <- err
-			}
-		}()
-	}
-	
-	// Collect disk IO metrics
-	if c.enabledCollectors["diskstats"] {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.collectDiskIOMetrics(); err != nil {
-				errCh <- err
-			}
-		}()
-	}
-	
-	// Collect network metrics
-	if c.enabledCollectors["netdev"] {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.collectNetworkMetrics(); err != nil {
-				errCh <- err
-			}
-		}()
-	}
-	
-	// Collect load metrics
-	if c.enabledCollectors["loadavg"] {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.collectLoadMetrics(); err != nil {
-				errCh <- err
-			}
-		}()
-	}
-	
-	// Wait for all collection tasks to complete
-	wg.Wait()
-	close(errCh)
-	
-	// Check for errors
-	var lastErr error
-	for err := range errCh {
-		lastErr = err
-	}
-	
-	return lastErr
-}
-
-// collectCPUMetrics collects CPU-related metrics
-func (c *Collector) collectCPUMetrics() error {
-	// Get CPU usage with minimal overhead
-	cpuPercents, err := cpu.PercentWithContext(c.ctx, 0, true)
+	memInfo, err := mem.VirtualMemory()
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to get memory info: %w", err)
 	}
 	
-	// Update metrics in batch
-	for i, percent := range cpuPercents {
-		cpuID := fmt.Sprintf("cpu%d", i)
-		c.cpuUsage.WithLabelValues(cpuID, "user").Set(percent)
-	}
+	fmt.Fprintf(w, "node_memory_MemTotal_bytes %d\n", memInfo.Total)
+	fmt.Fprintf(w, "node_memory_MemFree_bytes %d\n", memInfo.Free)
+	fmt.Fprintf(w, "node_memory_MemAvailable_bytes %d\n", memInfo.Available)
+	// Only add the most important memory metrics
+
+	// Filesystem metrics would be added here, but only essential ones
+	
+	// Network metrics would be added here, but only essential ones
+	
+	// Load metrics would be added here, but only essential ones
 	
 	return nil
 }
+```
 
-// collectMemoryMetrics collects memory-related metrics
-func (c *Collector) collectMemoryMetrics() error {
-	memStats, err := mem.VirtualMemoryWithContext(c.ctx)
-	if err != nil {
-		return err
-	}
-	
-	c.memoryStats.WithLabelValues("total").Set(float64(memStats.Total))
-	c.memoryStats.WithLabelValues("used").Set(float64(memStats.Used))
-	c.memoryStats.WithLabelValues("free").Set(float64(memStats.Free))
-	c.memoryStats.WithLabelValues("cached").Set(float64(memStats.Cached))
-	c.memoryStats.WithLabelValues("buffers").Set(float64(memStats.Buffers))
-	
-	return nil
+#### Kubernetes API Client
+
+```go
+// pkg/kubernetes/client/client.go
+
+package client
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+// Client is a lightweight Kubernetes API client
+type Client struct {
+	httpClient *http.Client
+	baseURL    string
+	token      string
+	caCert     []byte
 }
 
-// Other collector methods omitted for brevity...
-
-// containsString checks if a string slice contains a specific string
-func containsString(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
+// NewClient creates a new Kubernetes API client.
+// It automatically detects in-cluster configuration when baseURL and token are empty.
+func NewClient(baseURL, token string) (*Client, error) {
+	if baseURL == "" {
+		// Auto-detect Kubernetes API server URL from environment
+		baseURL = "https://kubernetes.default.svc"
+	}
+	
+	if token == "" {
+		// Try to read token from service account mount
+		var err error
+		token, err = readServiceAccountToken()
+		if err != nil {
+			return nil, fmt.Errorf("cannot read service account token: %w", err)
 		}
 	}
-	return false
-}
-```
-
-#### Container Collector Implementation
-
-```go
-// pkg/kubernetes/container/collector.go
-
-package container
-
-import (
-	"context"
-	"sync"
-	"time"
 	
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/api/types"
+	// Read CA certificate for secure API communication
+	caCert, err := readServiceAccountCA()
+	if err != nil {
+		return nil, fmt.Errorf("cannot read service account CA: %w", err)
+	}
 	
-	"github.com/VictoriaMetrics/VictoriaMetrics/pkg/kubernetes/collector"
-)
-
-// Collector implements container metrics collection
-type Collector struct {
-	// Context and lifecycle management
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	interval   time.Duration
+	// Create transport with proper TLS configuration
+	transport, err := createTransport(caCert)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create HTTP transport: %w", err)
+	}
 	
-	// Client connections
-	dockerClient *client.Client
-	
-	// Cache settings
-	useCache      bool
-	containerCache map[string]*containerInfo
-	mutex          sync.RWMutex
-	
-	// Worker count
-	workers int
-	
-	// Enabled collectors
-	enabledCollectors map[string]bool
-	
-	// Metric definitions
-	cpuUsage        *prometheus.GaugeVec
-	cpuThrottling   *prometheus.GaugeVec
-	memoryUsage     *prometheus.GaugeVec
-	memoryFailures  *prometheus.GaugeVec
-	networkUsage    *prometheus.GaugeVec
-	diskIO          *prometheus.GaugeVec
-	containerState  *prometheus.GaugeVec
-	
-	// Performance metrics
-	scrapeDuration    prometheus.Histogram
-	scrapeErrors      prometheus.Counter
-	containersScraped prometheus.Gauge
+	return &Client{
+		httpClient: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: transport,
+		},
+		baseURL: baseURL,
+		token:   token,
+		caCert:  caCert,
+	}, nil
 }
 
-// containerInfo holds cached container metadata
-type containerInfo struct {
-	ID          string
-	Name        string
-	PodName     string
-	Namespace   string
-	LastSeen    time.Time
-	Labels      map[string]string
+// GetPods retrieves pods from the given namespace (empty means all namespaces)
+func (c *Client) GetPods(ctx context.Context, namespace string) ([]Pod, error) {
+	url := fmt.Sprintf("%s/api/v1/pods", c.baseURL)
+	if namespace != "" {
+		url = fmt.Sprintf("%s/api/v1/namespaces/%s/pods", c.baseURL, namespace)
+	}
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get pods, status code: %d", resp.StatusCode)
+	}
+	
+	var podList PodList
+	if err := json.NewDecoder(resp.Body).Decode(&podList); err != nil {
+		return nil, err
+	}
+	
+	return podList.Items, nil
 }
 
-// Implementation details omitted for brevity...
-```
-
-#### Kubernetes State Collector Implementation
-
-```go
-// pkg/kubernetes/kube-state/collector.go
-
-package kubestate
-
-import (
-	"context"
-	"sync"
-	"time"
+// Pod represents a Kubernetes Pod
+type Pod struct {
+	Metadata struct {
+		Name        string            `json:"name"`
+		Namespace   string            `json:"namespace"`
+		UID         string            `json:"uid"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
+	} `json:"metadata"`
 	
-	"github.com/prometheus/client_golang/prometheus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
-	"k8s.io/client-go/informers"
-	corev1 "k8s.io/api/core/v1"
-	appsv1 "k8s.io/api/apps/v1"
-	
-	"github.com/VictoriaMetrics/VictoriaMetrics/pkg/kubernetes/collector"
-)
-
-// Collector implements Kubernetes state metrics collection
-type Collector struct {
-	// Context and lifecycle management
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	interval   time.Duration
-	
-	// Kubernetes client and caches
-	client          kubernetes.Interface
-	informerFactory informers.SharedInformerFactory
-	
-	// Work queue
-	workqueue  workqueue.RateLimitingInterface
-	workers    int
-	
-	// Monitored resource types
-	resources        map[string]bool
-	namespaces       []string
-	excludeNamespaces []string
-	
-	// Metric definitions
-	podMetrics       *prometheus.GaugeVec
-	deploymentMetrics *prometheus.GaugeVec
-	nodeMetrics      *prometheus.GaugeVec
-	serviceMetrics   *prometheus.GaugeVec
-	pvcMetrics       *prometheus.GaugeVec
-	
-	// Performance metrics
-	scrapeLatency    prometheus.Histogram
-	apiErrors        prometheus.Counter
-	resourcesScraped prometheus.CounterVec
+	Status struct {
+		Phase     string `json:"phase"`
+		HostIP    string `json:"hostIP"`
+		PodIP     string `json:"podIP"`
+		Conditions []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
+		ContainerStatuses []struct {
+			Name        string `json:"name"`
+			ContainerID string `json:"containerID"`
+			Ready       bool   `json:"ready"`
+			RestartCount int   `json:"restartCount"`
+		} `json:"containerStatuses"`
+	} `json:"status"`
 }
 
-// Implementation details omitted for brevity...
-```
-
-#### Auto-Discovery Implementation
-
-```go
-// pkg/kubernetes/autodiscover/collector.go
-
-package autodiscover
-
-import (
-	"context"
-	"sync"
-	"time"
-	
-	"github.com/prometheus/client_golang/prometheus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/apimachinery/pkg/util/yaml"
-	
-	"github.com/VictoriaMetrics/VictoriaMetrics/pkg/kubernetes/collector"
-	"github.com/VictoriaMetrics/VictoriaMetrics/pkg/promscrape"
-)
-
-// Collector implements Kubernetes application auto-discovery
-type Collector struct {
-	// Context and lifecycle management
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	interval   time.Duration
-	
-	// Kubernetes client
-	client     kubernetes.Interface
-	
-	// Configuration
-	roles             []string
-	podConfig         RoleConfig
-	serviceConfig     RoleConfig
-	nodeConfig        RoleConfig
-	endpointsConfig   RoleConfig
-	ingressConfig     RoleConfig
-	
-	// Performance metrics
-	discoveredTargets prometheus.GaugeVec
-	scrapeErrors      prometheus.Counter
-	scrapeLatency     prometheus.Histogram
+// PodList represents a list of Kubernetes Pods
+type PodList struct {
+	Items []Pod `json:"items"`
 }
 
-// Implementation details omitted for brevity...
+// Helper functions omitted for brevity...
 ```
 
 ## Risks and Mitigations
@@ -1075,7 +788,7 @@ In environments with multiple vmagent versions:
 ### Rollout, Upgrade and Rollback Planning
 
 1. **How can an operator determine if the feature is in use?**
-   - Check for presence of vm_* metrics from the collectors
+   - Check for presence of metrics from the collectors (node_*, container_*, kube_*)
    - Look for log messages indicating Kubernetes monitoring is enabled
    - Monitor resource usage patterns typical of active collectors
 
